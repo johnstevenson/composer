@@ -228,7 +228,9 @@ class EventDispatcher
                         unset($argsString);
                     }
                     if (strpos($callable, '@composer ') === 0) {
-                        $exec = $this->getPhpExecCommand() . ' ' . ProcessExecutor::escape(Platform::getEnv('COMPOSER_BINARY')) . ' ' . implode(' ', $args);
+                        $composerArgs = array_merge([Platform::getEnv('COMPOSER_BINARY')], $args);
+                        $execArgs = implode(' ', array_map(static function ($arg) { return ProcessExecutor::escape($arg); }, $composerArgs));
+                        $exec = $this->getPhpExecCommand() . ' ' . $execArgs;
                         if (0 !== ($exitCode = $this->executeTty($exec))) {
                             $this->io->writeError(sprintf('<error>Script %s handling the %s event returned with error code '.$exitCode.'</error>', $callable, $event->getName()), true, IOInterface::QUIET);
 
