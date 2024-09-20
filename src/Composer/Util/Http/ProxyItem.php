@@ -38,6 +38,7 @@ class ProxyItem
     {
         $syntaxError = sprintf('unsupported `%s` syntax', $envName);
 
+        // parse_url replaces these characters with an underscore
         if (strpbrk($proxyUrl, "\r\n\t") !== false) {
             throw new \RuntimeException($syntaxError);
         }
@@ -45,29 +46,32 @@ class ProxyItem
             throw new \RuntimeException($syntaxError);
         }
         if (!isset($proxy['host'])) {
-            throw new \RuntimeException('unable to find proxy host in ' . $envName);
+            throw new \RuntimeException('host missing in ' . $envName);
         }
 
-        $scheme = isset($proxy['scheme']) ? strtolower($proxy['scheme']) . '://' : 'http://';
+        $scheme = isset($proxy['scheme']) ? strtolower($proxy['scheme']) : 'http';
+
+        // Check scheme, allowing SOCKS5 via curl, which is checked when using php streams
+        $allowedSchemes = ['http', 'https', 'socks5'];
+        if (!in_array($scheme, $allowedSchemes, true)) {
+            throw new \RuntimeException(sprintf('unsupported scheme `%s` in %s', $scheme, $envName));
+        }
+
         $safe = '';
 
         if (isset($proxy['user'])) {
-            $safe = '***';
+            $safe = '***@';
+
+            // Always include a password component (matches curl behaviour)
             $user = $proxy['user'];
-            $auth = rawurldecode($proxy['user']);
+            $pass = $proxy['pass'] ?? '';
 
-            if (isset($proxy['pass'])) {
-                $safe .= ':***';
-                $user .= ':' . $proxy['pass'];
-                $auth .= ':' . rawurldecode($proxy['pass']);
-            }
+            // CURLOPT_PROXYUSERPWD requires percent-encoded values
+            $this->curlAuth = $user . ':' . $pass;
 
-            $safe .= '@';
-
-            if (strlen($user) > 0) {
-                $this->curlAuth = $user;
-                $this->optionsAuth = 'Proxy-Authorization: Basic ' . base64_encode($auth);
-            }
+            // The unencoded values are base64-encoded for the auth header
+            $auth = rawurldecode($user) . ':' . rawurldecode($pass);
+            $this->optionsAuth = base64_encode($auth);
         }
 
         $host = $proxy['host'];
@@ -75,26 +79,21 @@ class ProxyItem
 
         if (isset($proxy['port'])) {
             $port = $proxy['port'];
-        } elseif ($scheme === 'http://') {
+        } elseif ($scheme === 'http') {
             $port = 80;
-        } elseif ($scheme === 'https://') {
+        } elseif ($scheme === 'https') {
             $port = 443;
         }
 
-        // We need a port because curl uses 1080 for http. Port 0 is reserved,
-        // but is considered valid depending on the PHP or Curl version.
         if ($port === null) {
-            throw new \RuntimeException('unable to find proxy port in ' . $envName);
-        }
-        if ($port === 0) {
-            throw new \RuntimeException('port 0 is reserved in ' . $envName);
+            throw new \RuntimeException('port is missing in ' . $envName);
         }
 
-        $this->url = sprintf('%s%s:%d', $scheme, $host, $port);
-        $this->safeUrl = sprintf('%s%s%s:%d', $scheme, $safe, $host, $port);
+        $this->url = sprintf('%s://%s:%d', $scheme, $host, $port);
+        $this->safeUrl = sprintf('%s://%s%s:%d', $scheme, $safe, $host, $port);
 
-        $scheme = str_replace(['http://', 'https://'], ['tcp://', 'ssl://'], $scheme);
-        $this->optionsProxy = sprintf('%s%s:%d', $scheme, $host, $port);
+        // http(s):// is not supported in proxy context options
+        $this->optionsProxy = str_replace(['http://', 'https://'], ['tcp://', 'ssl://'], $this->url);
     }
 
     /**
@@ -104,14 +103,13 @@ class ProxyItem
      */
     public function toRequestProxy(string $scheme): RequestProxy
     {
-        $options = ['http' => ['proxy' => $this->optionsProxy]];
+        $options = [
+            'requestScheme' => $scheme,
+            'proxy' => $this->optionsProxy,
+        ];
 
         if ($this->optionsAuth !== null) {
-            $options['http']['header'] = $this->optionsAuth;
-        }
-
-        if ($scheme === 'http') {
-            $options['http']['request_fulluri'] = true;
+            $options['auth'] = $this->optionsAuth;
         }
 
         return new RequestProxy($this->url, $this->curlAuth, $options, $this->safeUrl);

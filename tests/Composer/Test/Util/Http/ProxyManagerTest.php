@@ -15,9 +15,6 @@ namespace Composer\Test\Util\Http;
 use Composer\Util\Http\ProxyManager;
 use Composer\Test\TestCase;
 
-/**
- * @phpstan-import-type contextOptions from \Composer\Util\Http\RequestProxy
- */
 class ProxyManagerTest extends TestCase
 {
     protected function setUp(): void
@@ -62,12 +59,16 @@ class ProxyManagerTest extends TestCase
         self::assertFalse($sameInstance === $newInstance);
     }
 
-    public function testGetProxyForRequestThrowsOnBadProxyUrl(): void
+    /**
+     * Used by Composer\Console\Application::hintCommonErrors
+     */
+    public function testThrowsOnBadProxyUrlWithPrefixedMessage(): void
     {
         $_SERVER['http_proxy'] = 'localhost';
         $proxyManager = ProxyManager::getInstance();
 
         self::expectException('Composer\Downloader\TransportException');
+        self::expectExceptionMessage('Unable to use a proxy:');
         $proxyManager->getProxyForRequest('http://example.com');
     }
 
@@ -96,6 +97,7 @@ class ProxyManagerTest extends TestCase
             [['HTTP_PROXY' => 'http://upper.com', 'http_proxy' => 'http://lower.com'], 'http://repo.org', 'http://lower.com:80'],
             [['CGI_HTTP_PROXY' => 'http://upper.com', 'cgi_http_proxy' => 'http://lower.com'], 'http://repo.org', 'http://lower.com:80'],
             [['HTTPS_PROXY' => 'http://upper.com', 'https_proxy' => 'http://lower.com'], 'https://repo.org', 'http://lower.com:80'],
+            [['NO_PROXY' => 'upper.com', 'no_proxy' => 'lower.com', 'http_proxy' => 'http://proxy.com'], 'http://lower.com', 'excluded by no_proxy'],
         ];
     }
 
@@ -125,75 +127,68 @@ class ProxyManagerTest extends TestCase
         ];
     }
 
-    public function testNoHttpProxyDoesNotUseHttpsProxy(): void
-    {
-        $_SERVER['https_proxy'] = 'https://proxy.com:443';
-        $proxyManager = ProxyManager::getInstance();
-
-        $proxy = $proxyManager->getProxyForRequest('http://repo.org');
-        self::assertSame('', $proxy->getStatus());
-    }
-
-    public function testNoHttpsProxyDoesNotUseHttpProxy(): void
-    {
-        $_SERVER['http_proxy'] = 'http://proxy.com:80';
-        $proxyManager = ProxyManager::getInstance();
-
-        $proxy = $proxyManager->getProxyForRequest('https://repo.org');
-        self::assertSame('', $proxy->getStatus());
-    }
-
     /**
-     * @dataProvider dataRequest
+     * @dataProvider dataSchemeSpecific
      *
      * @param array<string, string> $server
-     * @param non-empty-string      $url
-     * @param ?contextOptions       $options
+     * @param non-empty-string $url
      */
-    public function testGetProxyForRequest(array $server, string $url, ?array $options, string $status, bool $excluded): void
+    public function testImplementsSchemeSpecificEnvs(array $server, string $url, string $status): void
     {
         $_SERVER = array_merge($_SERVER, $server);
         $proxyManager = ProxyManager::getInstance();
 
         $proxy = $proxyManager->getProxyForRequest($url);
-        self::assertSame($options, $proxy->getContextOptions());
         self::assertSame($status, $proxy->getStatus());
-        self::assertSame($excluded, $proxy->isExcludedByNoProxy());
     }
 
     /**
-     * Tests context options. curl options are tested in RequestProxyTest.php
-     *
-     * @return list<array{0: array<string, string>, 1: string, 2: ?contextOptions, 3: string, 4: bool}>
+     * @return list<array{0: array<string, string>, 1: string}>
      */
-    public static function dataRequest(): array
+    public static function dataSchemeSpecific(): array
+    {
+        $http = ['http_proxy' => 'http://proxy.com'];
+        $https = ['https_proxy' => 'http://otherproxy.com'];
+        $both = array_merge($http, $https);
+
+        // server, url, status
+        return [
+            [$both, 'http://repo.org', 'http://proxy.com:80'],
+            [$both, 'https://repo.org', 'http://otherproxy.com:80'],
+            [$http, 'https://repo.org', ''],
+            [$https, 'http://repo.org', ''],
+        ];
+    }
+
+    /**
+     * @dataProvider dataNoProxy
+     *
+     * @param non-empty-string $url
+     */
+    public function testNoProxy(string $noproxy, string $url, string $status): void
     {
         $server = [
-            'http_proxy' => 'http://user:p%40ss@proxy.com',
-            'https_proxy' => 'https://proxy.com:443',
-            'no_proxy' => 'other.repo.org',
+            'http_proxy' => 'http://proxy.com',
+            'https_proxy' => 'http://proxy.com',
+            'no_proxy' => $noproxy
         ];
+        $_SERVER = array_merge($_SERVER, $server);
+        $proxyManager = ProxyManager::getInstance();
 
-        // server, url, options, status, excluded
+        $proxy = $proxyManager->getProxyForRequest($url);
+        self::assertSame($status, $proxy->getStatus());
+    }
+
+    /**
+     * @return array<string, array<string>>
+     */
+    public static function dataNoProxy(): array
+    {
+        // noproxy, url, status
         return [
-            [[], 'http://repo.org', null, '', false],
-            [$server, 'http://repo.org',
-                ['http' => [
-                    'proxy' => 'tcp://proxy.com:80',
-                    'header' => 'Proxy-Authorization: Basic dXNlcjpwQHNz',
-                    'request_fulluri' => true,
-                ]],
-                'http://***:***@proxy.com:80',
-                false,
-            ],
-            [$server, 'https://repo.org',
-                ['http' => [
-                    'proxy' => 'ssl://proxy.com:443',
-                ]],
-                'https://proxy.com:443',
-                false,
-            ],
-            [$server, 'https://other.repo.org', null, 'excluded by no_proxy', true],
+            'proxy-80' => ['repo.org:443', 'http://repo.org', 'http://proxy.com:80'],
+            'no-proxy-443' => ['repo.org:443', 'https://repo.org', 'excluded by no_proxy'],
+            'no-proxy-*' => ['*', 'http://repo.org', 'excluded by no_proxy'],
         ];
     }
 }

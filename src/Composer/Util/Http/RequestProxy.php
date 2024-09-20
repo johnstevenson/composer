@@ -18,12 +18,12 @@ use Composer\Downloader\TransportException;
  * @internal
  * @author John Stevenson <john-stevenson@blueyonder.co.uk>
  *
- * @phpstan-type contextOptions array{http: array{proxy: string, header?: string, request_fulluri?: bool}}
+ * @phpstan-type streamOptions array{requestScheme: string, proxy: string, auth?: string}
  */
 class RequestProxy
 {
-    /** @var ?contextOptions */
-    private $contextOptions;
+    /** @var ?streamOptions */
+    private $streamOptions;
     /** @var ?non-empty-string */
     private $status;
     /** @var ?non-empty-string */
@@ -34,14 +34,14 @@ class RequestProxy
     /**
      * @param ?non-empty-string $url The proxy url, without authorization
      * @param ?non-empty-string $auth Authorization for curl
-     * @param ?contextOptions $contextOptions
+     * @param ?streamOptions $streamOptions
      * @param ?non-empty-string $status
      */
-    public function __construct(?string $url, ?string $auth, ?array $contextOptions, ?string $status)
+    public function __construct(?string $url, ?string $auth, ?array $streamOptions, ?string $status)
     {
         $this->url = $url;
         $this->auth = $auth;
-        $this->contextOptions = $contextOptions;
+        $this->streamOptions = $streamOptions;
         $this->status = $status;
     }
 
@@ -56,13 +56,61 @@ class RequestProxy
     }
 
     /**
-     * Returns the context options to use for this request, otherwise null
+     * Adds proxy options to an array of context options
      *
-     * @return ?contextOptions
+     * @param mixed[] $options
+     * @return mixed[]
+     * @throws TransportException If the proxy cannot be used
      */
-    public function getContextOptions(): ?array
+    public function addContextOptions(array $options): array
     {
-        return $this->contextOptions;
+        if ($this->streamOptions === null) {
+            return $options;
+        }
+
+        // Check for SOCKS5 proxy which requires curl
+        $proxyScheme = (string) parse_url((string) $this->url, PHP_URL_SCHEME);
+        if ($proxyScheme === 'socks5') {
+            $this->throwException('the curl extension is needed to use a SOCKS5 proxy.');
+        }
+
+        $forHttps = $this->streamOptions['requestScheme'] === 'https'; // @phpstan-ignore-line
+
+        // Check for missing extensions
+        if ($this->isSecure()) {
+            if (!extension_loaded('openssl')) {
+                $this->throwException('the openssl extension is needed to use an HTTPS proxy.');
+            }
+            if ($forHttps) {
+                $this->throwException('the curl extension is needed to make https requests through an HTTPS proxy.');
+            }
+        } elseif ($forHttps && !extension_loaded('openssl')) {
+            $this->throwException('the openssl extension is needed to make https requests through a proxy.');
+        }
+
+        // Add http proxy options
+        if (!isset($options['http'])) {
+            $options['http'] = [];
+        }
+
+        $options['http']['proxy'] = $this->streamOptions['proxy']; // @phpstan-ignore-line
+
+        if (!$forHttps) {
+            $options['http']['request_fulluri'] = true;
+        }
+
+        if (isset($this->streamOptions['auth'])) {
+            // Ensure headers are an array
+            if (!isset($options['http']['header'])) {
+                $options['http']['header'] = [];
+            } elseif (is_string($options['http']['header'])) {
+                $options['http']['header'] = explode("\r\n", $options['http']['header']);
+            }
+
+            $options['http']['header'][] = 'Proxy-Authorization: Basic ' . $this->streamOptions['auth'];
+        }
+
+        return $options;
     }
 
     /**
@@ -70,11 +118,12 @@ class RequestProxy
      *
      * @param array<string, string|int> $sslOptions
      * @return array<int, string|int>
+     * @throws TransportException If a secure proxy is not supported
      */
     public function getCurlOptions(array $sslOptions): array
     {
         if ($this->isSecure() && !$this->supportsSecureProxy()) {
-            throw new TransportException('Cannot use an HTTPS proxy. PHP >= 7.3 and cUrl >= 7.52.0 are required.');
+            $this->throwException('PHP >= 7.3 and curl >= 7.52.0 are needed to use an HTTPS proxy.');
         }
 
         // Always set a proxy url, even an empty value, because it tells curl
@@ -155,14 +204,22 @@ class RequestProxy
      * This depends on PHP7.3+ for CURL_VERSION_HTTPS_PROXY
      * and curl including the feature (from version 7.52.0)
      */
-    public function supportsSecureProxy(): bool
+    private function supportsSecureProxy(): bool
     {
-        if (false === ($version = curl_version()) || !defined('CURL_VERSION_HTTPS_PROXY')) {
+        if (!defined('CURL_VERSION_HTTPS_PROXY') || false === ($version = curl_version())) {
             return false;
         }
 
         $features = $version['features'];
 
         return (bool) ($features & CURL_VERSION_HTTPS_PROXY);
+    }
+
+    /**
+     * Throws a formatted exception to indicate a proxy error
+     */
+    private function throwException(string $message): void
+    {
+        throw new TransportException('Unable to use a proxy: ' . $message);
     }
 }

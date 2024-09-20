@@ -143,7 +143,7 @@ EOT
                 $proxy = $proxyManager->getProxyForRequest($proto.'://repo.packagist.org');
                 if ($proxy->getStatus() !== '') {
                     $type = $proxy->isSecure() ? 'HTTPS' : 'HTTP';
-                    $io->write('Checking '.$type.' proxy with '.$proto.': ', false);
+                    $io->write('Checking proxy with '.$proto.': ', false);
                     $this->outputResult($this->checkHttpProxy($proxy, $proto));
                 }
             }

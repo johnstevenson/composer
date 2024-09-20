@@ -76,28 +76,7 @@ final class StreamContextFactory
         // Add stream proxy options if there is a proxy
         if (!$forCurl) {
             $proxy = ProxyManager::getInstance()->getProxyForRequest($url);
-            $proxyOptions = $proxy->getContextOptions();
-            if ($proxyOptions !== null) {
-                $isHttpsRequest = 0 === strpos($url, 'https://');
-
-                if ($proxy->isSecure()) {
-                    if (!extension_loaded('openssl')) {
-                        throw new TransportException('You must enable the openssl extension to use a secure proxy.');
-                    }
-                    if ($isHttpsRequest) {
-                        throw new TransportException('You must enable the curl extension to make https requests through a secure proxy.');
-                    }
-                } elseif ($isHttpsRequest && !extension_loaded('openssl')) {
-                    throw new TransportException('You must enable the openssl extension to make https requests through a proxy.');
-                }
-
-                // Header will be a Proxy-Authorization string or not set
-                if (isset($proxyOptions['http']['header'])) {
-                    $options['http']['header'][] = $proxyOptions['http']['header'];
-                    unset($proxyOptions['http']['header']);
-                }
-                $options = array_replace_recursive($options, $proxyOptions);
-            }
+            $options = $proxy->addContextOptions($options);
         }
 
         if (defined('HHVM_VERSION')) {

@@ -77,6 +77,15 @@ http_proxy=https://proxy.com:443
 https_proxy=https://proxy.com:443
 ```
 
+## SOCKS5 proxy servers
+
+Composer supports SOCKS5 proxy servers when curl is available.
+
+```
+http_proxy=socks5://proxy.com:1080
+https_proxy=socks5://proxy.com:1080
+```
+
 ## Bypassing the proxy for specific domains
 
 Use the `no_proxy` (or `NO_PROXY`) environment variable to set a comma-separated list of domains

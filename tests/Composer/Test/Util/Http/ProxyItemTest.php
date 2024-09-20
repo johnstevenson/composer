@@ -36,14 +36,13 @@ class ProxyItemTest extends TestCase
             'ws-n' => ["http://user\nname@localhost:80"],
             'ws-t' => ["http://user\tname@localhost:80"],
             'no-host' => ['localhost'],
-            'no-port' => ['scheme://localhost'],
-            'port-0' => ['http://localhost:0'],
-            'port-big' => ['http://localhost:65536'],
+            'bad-scheme' => ['ssh://proxy.com'],
+            'no-port' => ['socks5://proxy.com'],
         ];
     }
 
     /**
-     * @dataProvider dataFormatting
+     * @dataProvider dataUrlFormatting
      */
     public function testUrlFormatting(string $url, string $expected): void
     {
@@ -56,7 +55,7 @@ class ProxyItemTest extends TestCase
     /**
      * @return array<string, array<string>>
      */
-    public static function dataFormatting(): array
+    public static function dataUrlFormatting(): array
     {
         // url, expected
         return [
@@ -66,7 +65,80 @@ class ProxyItemTest extends TestCase
             'adds-http-port' => ['http://proxy.com', 'http://proxy.com:80'],
             'adds-https-port' => ['https://proxy.com', 'https://proxy.com:443'],
             'removes-user' => ['http://user@proxy.com:6180', 'http://***@proxy.com:6180'],
-            'removes-user-pass' => ['http://user:p%40ss@proxy.com:6180', 'http://***:***@proxy.com:6180'],
+            'removes-user-pass' => ['http://user:p%40ss@proxy.com:6180', 'http://***@proxy.com:6180'],
+        ];
+    }
+
+    /**
+     * @dataProvider dataContextProxyFormatting
+     */
+    public function testContextProxyFormatting(string $url, string $contextProxy): void
+    {
+        $proxyItem = new ProxyItem($url, 'http');
+
+        $ref = new \ReflectionProperty($proxyItem, 'optionsProxy');
+        $ref->setAccessible(true);
+        $optionsProxy = $ref->getValue($proxyItem);
+
+        self::assertSame($contextProxy, $optionsProxy);
+    }
+
+    /**
+     * @return list<array<string>>
+     */
+    public static function dataContextProxyFormatting(): array
+    {
+        // url, contextProxy
+        return [
+            ['http://proxy.com', 'tcp://proxy.com:80'],
+            ['https://proxy.com', 'ssl://proxy.com:443'],
+        ];
+    }
+
+    public function testAuthFormatting(): void
+    {
+        $userinfo = 'user:p%40ss';
+        $url = sprintf('http://%s@proxy.com', $userinfo);
+        $proxyItem = new ProxyItem($url, 'http');
+
+        // curlAuth is percent-encoded userinfo
+        $ref = new \ReflectionProperty($proxyItem, 'curlAuth');
+        $ref->setAccessible(true);
+        $curlAuth = $ref->getValue($proxyItem);
+        self::assertSame($userinfo, $curlAuth);
+
+        // proxy authorization is unencoded userinfo, base64 encoded
+        $auth = base64_encode('user:p@ss');
+        $ref = new \ReflectionProperty($proxyItem, 'optionsAuth');
+        $ref->setAccessible(true);
+        $optionsAuth = $ref->getValue($proxyItem);
+
+        self::assertSame($auth, $optionsAuth);
+    }
+
+    /**
+     * @dataProvider dataEmptyUserInfo
+     */
+    public function testEmptyUserInfo(string $userinfo): void
+    {
+        $url = sprintf('http://%s@proxy.com', $userinfo);
+        $proxyItem = new ProxyItem($url, 'http');
+
+        $ref = new \ReflectionProperty($proxyItem, 'curlAuth');
+        $ref->setAccessible(true);
+        $curlAuth = $ref->getValue($proxyItem);
+        self::assertSame(':', $curlAuth);
+    }
+
+    /**
+     * @return list<array<string>>
+     */
+    public static function dataEmptyUserInfo(): array
+    {
+        // userinfo
+        return [
+            [''],
+            [':'],
         ];
     }
 }
