@@ -587,7 +587,7 @@ TAGSPUBKEY
     /**
      * Invokes a UAC prompt to update composer.phar as an admin
      *
-     * Uses a .vbs script to elevate and run the cmd.exe copy command.
+     * Uses either sudo.exe or VBScript to elevate and run cmd.exe move.
      *
      * @param  string $localFilename The composer.phar location
      * @param  string $newFilename   The downloaded or backup phar
@@ -613,7 +613,11 @@ TAGSPUBKEY
 
             return false;
         }
-        $script = $tmpFile.'.vbs';
+
+        exec('sudo config 2> NUL', $output, $exitCode);
+        $usingSudo = $exitCode === 0;
+
+        $script = $usingSudo ? $tmpFile.'.bat' : $tmpFile.'.vbs';
         rename($tmpFile, $script);
 
         $checksum = hash_file('sha256', $newFilename);
@@ -622,14 +626,21 @@ TAGSPUBKEY
         $source = str_replace('/', '\\', $newFilename);
         $destination = str_replace('/', '\\', $localFilename);
 
-        $vbs = <<<EOT
+        if ($usingSudo) {
+            $code = sprintf('move "%s" "%s"', $source, $destination);
+        } else {
+            $code = <<<EOT
 Set UAC = CreateObject("Shell.Application")
-UAC.ShellExecute "cmd.exe", "/c copy /b /y ""$source"" ""$destination""", "", "runas", 0
-Wscript.Sleep(300)
+UAC.ShellExecute "cmd.exe", "/c move /y ""$source"" ""$destination""", "", "runas", 0
 EOT;
+        }
 
-        file_put_contents($script, $vbs);
-        exec('"'.$script.'"');
+        file_put_contents($script, $code);
+        $command = $usingSudo ? sprintf('sudo "%s"', $script) : sprintf('"%s"', $script);
+        exec($command);
+
+        // Allow time for the operation to complete
+        usleep(300000);
         @unlink($script);
 
         // see if the file was copied and is still accessible
